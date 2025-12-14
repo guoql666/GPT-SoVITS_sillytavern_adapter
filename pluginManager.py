@@ -6,6 +6,13 @@ from typing import Callable, Any, List, Dict, Tuple
 
 
 class AsyncPluginManager:
+    # 优先级常量
+    HIGH_PRIORITY = 10
+    VERY_HIGH_PRIORITY = 5
+    LOW_PRIORITY = 80
+    VERY_LOW_PRIORITY = 90
+    NORMAL_PRIORITY = 50
+    
     def __init__(self):
         # 列表里存的是元组 (priority, function_name, function_object)
         # 例如: {"on_tts_request_processing": [(10, "my_plugin_func", <function object>), ... ], ...}

@@ -3,8 +3,8 @@ import argparse
 import uvicorn
 import httpx
 import logging
-import re
 import json
+from urllib.parse import urlparse
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +27,8 @@ os.makedirs(REF_AUDIO_DIR, exist_ok=True)
 # 日志配置
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Driver")
+if DEBUG_MODE:
+    logger.setLevel(logging.DEBUG)
 
 # FastAPI应用初始化
 app = FastAPI(title="SillyTavern Adapter for GPT-SoVITS")
@@ -74,12 +76,45 @@ class TTS_Request(BaseModel):
     sample_steps: int = 32
     super_sampling: bool = False
 
-    @field_validator('streaming_mode', pre=True)
+    @field_validator('streaming_mode', mode="before")
     def parse_streaming_mode(cls, v):
         if isinstance(v, str): return v.lower() == 'true'
         return v
 
 pass
+
+# 为本地/内网请求创建禁用代理的客户端配置，外部请求保留代理支持
+def get_localhost_client_kwargs():
+    """
+    为 127.0.0.1 等本地请求配置：禁用代理，避免代理拦截导致 502。
+    同时也为后端 API_V2_URL 的主机名禁用代理(支持内网 IP)。
+    外部请求(如翻译 API)仍使用环境变量中的代理配置。
+    """
+    mounts = {
+        "http://127.0.0.1": httpx.AsyncHTTPTransport(proxy=None),
+        "http://localhost": httpx.AsyncHTTPTransport(proxy=None),
+        "https://127.0.0.1": httpx.AsyncHTTPTransport(proxy=None),
+        "https://localhost": httpx.AsyncHTTPTransport(proxy=None),
+    } 
+    # 为后端 URL 的主机名也禁用代理（支持内网 IP）
+    try:
+        parsed = urlparse(API_V2_URL)
+        if parsed.hostname and parsed.hostname not in ["localhost", "127.0.0.1"]:
+            scheme = parsed.scheme or "http"
+            host_prefix = f"{scheme}://{parsed.hostname}"
+            if parsed.port:
+                # 如果指定了端口，也要加上
+                mounts[f"{scheme}://{parsed.hostname}:{parsed.port}"] = httpx.AsyncHTTPTransport(proxy=None)
+            else:
+                mounts[host_prefix] = httpx.AsyncHTTPTransport(proxy=None)
+            logger.debug(f"为后端 {host_prefix} 禁用代理")
+    except Exception as e:
+        logger.warning(f"解析 API_V2_URL 失败，已禁用本地代理: {e}")
+    return {
+        "timeout": timeout_config,
+        "mounts": mounts,
+        "trust_env": True,  # 外部请求仍使用环境变量代理
+    }
 
 # 根据角色名称切换模型
 async def switch_model(character_name: str):
@@ -87,39 +122,41 @@ async def switch_model(character_name: str):
         return None
     target_gpt = CHARACTER_MODEL_MAP[character_name].get("gpt")
     target_sovits = CHARACTER_MODEL_MAP[character_name].get("sovits")
-    # 向后端发送更改请求
-    async with httpx.AsyncClient(timeout=timeout_config) as client:
-        if target_gpt and CURRENT_LOADED_MODELS["gpt"] != target_gpt:
-            logger.info(f"[{character_name}] 切换GPT: ...{os.path.basename(target_gpt)[-15:]}")
-            try:
-                await client.get(f"{API_V2_URL}/set_gpt_weights", params={"weights_path": target_gpt})
-                CURRENT_LOADED_MODELS["gpt"] = target_gpt
-            except Exception as e:
-                logger.error(f"尝试切换GPT失败: {e}")
+    
+    if target_gpt and CURRENT_LOADED_MODELS["gpt"] != target_gpt:
+        logger.info(f"[{character_name}] 切换GPT: ...{os.path.basename(target_gpt)[-15:]}")
+        try:
+            # 使用本地请求配置（禁用代理），避免代理拦截导致 502
+            async with httpx.AsyncClient(**get_localhost_client_kwargs()) as client:
+                resp = await client.get(f"{API_V2_URL}/set_gpt_weights", params={"weights_path": target_gpt})
+                if resp.status_code == 200:
+                    CURRENT_LOADED_MODELS["gpt"] = target_gpt
+                    logger.info("GPT 切换成功")
+                else:
+                    logger.error(f"GPT 切换失败: status={resp.status_code} reason={resp.reason_phrase} body={resp.text}")
+        except Exception as e:
+            logger.error(f"尝试切换GPT失败: {e}")
 
-        if target_sovits and CURRENT_LOADED_MODELS["sovits"] != target_sovits:
-            logger.info(f"[{character_name}] 切换SoVITS: ...{os.path.basename(target_sovits)[-15:]}")
-            try:
-                await client.get(f"{API_V2_URL}/set_sovits_weights", params={"weights_path": target_sovits})
-                CURRENT_LOADED_MODELS["sovits"] = target_sovits
-            except Exception as e:
-                logger.error(f"尝试切换SoVITS失败: {e}")
+    if target_sovits and CURRENT_LOADED_MODELS["sovits"] != target_sovits:
+        logger.info(f"[{character_name}] 切换SoVITS: ...{os.path.basename(target_sovits)[-15:]}")
+        try:
+            # 使用本地请求配置（禁用代理），避免代理拦截导致 502
+            async with httpx.AsyncClient(**get_localhost_client_kwargs()) as client:
+                resp = await client.get(f"{API_V2_URL}/set_sovits_weights", params={"weights_path": target_sovits})
+                if resp.status_code == 200:
+                    CURRENT_LOADED_MODELS["sovits"] = target_sovits
+                    logger.info("SoVITS 切换成功")
+                else:
+                    logger.error(f"SoVITS 切换失败: status={resp.status_code} reason={resp.reason_phrase} body={resp.text}")
+        except Exception as e:
+            logger.error(f"尝试切换SoVITS失败: {e}")
 
 
-# 由于ST和卡面的内容可能存在一些兼容性问题，无法识别哪些是对话，哪些是模型的参数或者单纯的加引号
-# 所以这里需要对其进行过滤，针对不同的卡面可能需要不同的处理
-def clean_st_garbage_text(text: str) -> str:
-    if not text: return ""
-    text = re.sub(r'\\?#[0-9a-fA-F]{6}', '', text)
-    text = re.sub(r'"[^"]+"\.\s*"[^"]+"\.', '', text)
-    text = re.sub(r'"好感度".*?。', '', text)
-    text = re.sub(r'\[-?\d+,\s*\d+\].*?。', '', text)
-    text = text.replace('""', '').strip()
-    return text
+
 
 # 依旧是ST和卡面兼容性问题，处理路径问题和加载角色prompt
-# (感觉ST的GPT-SoVITSv2好久没人维护了，传过来的路径特别奇怪)
-def fix_request_path_and_load_prompt(request_data: dict):
+# (感觉ST的GPT-SoVITSv2好久没人维护了，传过来的路径特别奇怪，等有空了看看能不能改改交个pr(又挖坑...))
+async def fix_request_path_and_load_prompt(request_data: dict):
     raw_path = request_data.get("ref_audio_path", "")
     filename = os.path.basename(raw_path)
     # 处理类似 filename.wav.mp3 的情况
@@ -150,8 +187,13 @@ def fix_request_path_and_load_prompt(request_data: dict):
         prompt_text = character_name
 
     request_data["prompt_text"] = prompt_text
-    # 清理文本中的垃圾内容
-    request_data["text"] = clean_st_garbage_text(request_data.get("text", ""))
+    # 清理文本中的垃圾内容，将其单独抽象出来形成插件
+    request_data["text"] = await plugin_manager.run_hook(
+        "on_clean_text", 
+        data=request_data.get("text", ""),
+        character_name=character_name,
+        target_lang=target_lang
+    )
     return request_data, character_name, target_lang
 
 # 路由转发
@@ -160,7 +202,7 @@ def fix_request_path_and_load_prompt(request_data: dict):
 @app.post("/tts")
 async def tts_stream_endpoint(request: TTS_Request):
     request_data = request.model_dump()
-    request_data, character_name, target_lang = fix_request_path_and_load_prompt(request_data)
+    request_data, character_name, target_lang = await fix_request_path_and_load_prompt(request_data)
     logger.debug(f"处理后的请求数据: {request_data}")
 
     # 根据请求切换模型
@@ -172,12 +214,14 @@ async def tts_stream_endpoint(request: TTS_Request):
         data=request_data, 
         target_lang=target_lang
     )
+    logger.debug(f"插件处理后的请求数据: {request_data}")
 
     # 发送请求到后端TTS服务
     url = f"{API_V2_URL}/tts"
     async def stream_generator():
         try:
-            async with httpx.AsyncClient(timeout=timeout_config) as client:
+            # 使用本地请求配置（禁用代理），避免代理拦截导致 502
+            async with httpx.AsyncClient(**get_localhost_client_kwargs()) as client:
                 async with client.stream("POST", url, json=request_data) as resp:
                     if resp.status_code != 200:
                         err = await resp.aread()
@@ -230,7 +274,7 @@ async def tts_file_endpoint(request: TTS_Request, req_obj: Request):
     )
 
     url = f"{API_V2_URL}/tts"
-    async with httpx.AsyncClient(timeout=timeout_config) as client:
+    async with httpx.AsyncClient(**get_localhost_client_kwargs()) as client:
         resp = await client.post(url, json=request_data)
         if resp.status_code != 200:
             return JSONResponse(status_code=400, content={"msg": "Error", "detail": resp.text})

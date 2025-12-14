@@ -19,5 +19,8 @@ dist/
 # Editor/OS
 .DS_Store
 Thumbs.db
-.vscode/
+.vscode
+
+# personal files
+voice/*
 
