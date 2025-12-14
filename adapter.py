@@ -20,6 +20,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REF_AUDIO_DIR = os.path.join(BASE_DIR, REF_AUDIO_DIR_NAME)
 OUTPUT_DIR = os.path.join(BASE_DIR, OUTPUT_DIR_NAME)
 MODELS_CONFIG_PATH = os.path.join(BASE_DIR, MODELS_CONFIG_NAME)
+
+if API_V2_URL.endswith("/"):
+    API_V2_URL = API_V2_URL[:-1]
+
 # 初始化目录
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(REF_AUDIO_DIR, exist_ok=True)
