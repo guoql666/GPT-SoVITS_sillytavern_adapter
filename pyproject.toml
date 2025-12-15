@@ -1,6 +1,6 @@
 [project]
 name = "gpt-sovits-adapter"
-version = "0.1.0"
+version = "0.1.1"
 description = "FastAPI adapter for GPT-SoVITS with plugin system"
 authors = [{ name = "Your Name" }]
 readme = "README.md"

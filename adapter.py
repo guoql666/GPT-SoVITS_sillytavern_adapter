@@ -13,6 +13,7 @@ from pydantic import BaseModel, field_validator
 
 from config import *
 from pluginManager import plugin_manager
+import mimetypes
 
 
 # 基础路径设置
@@ -45,13 +46,17 @@ plugin_manager.load_plugins_from_dir("plugins")
 
 
 CHARACTER_MODEL_MAP = {}
-if os.path.exists(MODELS_CONFIG_PATH):
+# 加载角色模型配置
+MODELS_CONFIG_PATH_INFO = MODELS_CONFIG_PATH if not os.path.exists("models_local.json") else "models_local.json" 
+if os.path.exists(MODELS_CONFIG_PATH_INFO):
     try:
-        with open(MODELS_CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(MODELS_CONFIG_PATH_INFO, "r", encoding="utf-8") as f:
             CHARACTER_MODEL_MAP = json.load(f)
         logger.info(f"已加载配置: 成功读取{len(CHARACTER_MODEL_MAP)} 个角色配置")
     except Exception as e:
         logger.error(f"加载 models.json 失败: {e}")
+
+
 # 初始化当前加载的模型状态
 CURRENT_LOADED_MODELS = {"gpt": None, "sovits": None}
 
@@ -156,7 +161,27 @@ async def switch_model(character_name: str):
             logger.error(f"尝试切换SoVITS失败: {e}")
 
 
-
+def get_real_audio_extension(file_path: str) -> str:
+    """
+    获取给定路径文件的真实音频拓展名。
+    通过文件头判断常见音频文件类型，如 wav, ogg, mp3, flac 等。
+    """
+    # 先尝试获取文件的 MIME 类型
+    mime_type, _ = mimetypes.guess_type(file_path)
+    
+    # 根据 MIME 类型返回对应的音频拓展名
+    if mime_type:
+        if mime_type == 'audio/wav':
+            return 'wav'
+        elif mime_type == 'audio/ogg':
+            return 'ogg'
+        elif mime_type == 'audio/mpeg':
+            return 'mp3'
+        elif mime_type == 'audio/flac':
+            return 'flac'
+    
+    # 如果无法识别，返回空字符串
+    return ''
 
 # 依旧是ST和卡面兼容性问题，处理路径问题和加载角色prompt
 # (感觉ST的GPT-SoVITSv2好久没人维护了，传过来的路径特别奇怪，等有空了看看能不能改改交个pr(又挖坑...))
@@ -168,8 +193,8 @@ async def fix_request_path_and_load_prompt(request_data: dict):
         filename = ".".join(split_filename[:-2]) + "." + split_filename[-1]
     # 文件名就是对应的角色名
     character_name = os.path.splitext(filename)[0]
-    abs_path = os.path.join(REF_AUDIO_DIR, filename)
-    request_data["ref_audio_path"] = abs_path
+    abs_file_path = os.path.join(REF_AUDIO_DIR, filename)
+    request_data["ref_audio_path"] = abs_file_path
     # 加载角色信息
     target_lang = GLOBAL_DEFAULT_LANG
     if character_name in CHARACTER_MODEL_MAP:
@@ -178,7 +203,7 @@ async def fix_request_path_and_load_prompt(request_data: dict):
             target_lang = config_lang
     request_data["prompt_lang"] = target_lang
     # 读取参考文本
-    txt_path = os.path.splitext(abs_path)[0] + ".txt"
+    txt_path = os.path.splitext(abs_file_path)[0] + ".txt"
     prompt_text = ""
     if os.path.exists(txt_path):
         try:
@@ -191,6 +216,12 @@ async def fix_request_path_and_load_prompt(request_data: dict):
         prompt_text = character_name
 
     request_data["prompt_text"] = prompt_text
+    # 读取参考音频后缀
+    true_extension_name = get_real_audio_extension(abs_file_path)
+    if true_extension_name != "":
+        request_data["media_type"] = true_extension_name
+    else:
+        logger.warning(f"无法识别参考音频 {abs_file_path} 的真实格式，使用默认 media_type: {request_data.get('media_type', 'wav')}")
     # 清理文本中的垃圾内容，将其单独抽象出来形成插件
     request_data["text"] = await plugin_manager.run_hook(
         "on_clean_text", 

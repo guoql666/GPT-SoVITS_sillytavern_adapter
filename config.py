@@ -3,7 +3,7 @@
 API_V2_URL = "http://127.0.0.1:9880"
 
 # 调试模式
-DEBUG_MODE = False
+DEBUG_MODE = True
 
 # 目录设置
 # 参考音频存放目录

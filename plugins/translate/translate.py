@@ -9,6 +9,9 @@ except ImportError:
     SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
     SILICONFLOW_API_URL = os.getenv("SILICONFLOW_API_URL", "")
     SILICONFLOW_MODEL = os.getenv("SILICONFLOW_MODEL", "Qwen/Qwen2.5-14B-Instruct")
+
+# 优先使用环境变量中的 API Key，用于本地测试环境
+SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", SILICONFLOW_API_KEY)
 # 配置日志
 logger = logging.getLogger("Translator")
 
@@ -69,7 +72,7 @@ async def translate_text_handle(text: str, target_lang_code: str, api_key: str, 
     }
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=10.0), trust_env=True) as client:
             response = await client.post(SILICONFLOW_API_URL, json=payload, headers=headers)
             
             if response.status_code != 200:
