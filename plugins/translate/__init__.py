@@ -1,7 +1,8 @@
 from .translate import translate_text
+from config import plugins_config
 
 # 插件开关
-enabled = True
+enabled = plugins_config.get("translate", {}).get("enabled", False)
 
 def init_plugin(manager):
     if not enabled:

@@ -1,7 +1,10 @@
 from .cleaner import clean_st_garbage_text
+from config import plugins_config
 
+__package__ = "clean_text"
+__version__ = "0.1.0"
 # 插件开关
-enabled = True
+enabled = plugins_config.get("clean_text", {}).get("enabled", False)
 
 def init_plugin(manager):
     if not enabled:

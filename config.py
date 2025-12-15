@@ -3,7 +3,7 @@
 API_V2_URL = "http://127.0.0.1:9880"
 
 # 调试模式
-DEBUG_MODE = True
+DEBUG_MODE = False
 
 # 目录设置
 # 参考音频存放目录
@@ -22,3 +22,12 @@ SILICONFLOW_API_KEY = ""  # 请替换为你的实际API Key
 SILICONFLOW_API_URL = "https://api.siliconflow.cn/v1/chat/completions"
 # 默认使用的翻译模型名称
 SILICONFLOW_MODEL = "Qwen/Qwen2.5-14B-Instruct"  
+
+plugins_config = {
+    "clean_text":{
+        "enabled": True
+    },
+    "translate":{
+        "enabled": True
+    }
+}
